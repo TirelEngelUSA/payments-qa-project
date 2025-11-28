@@ -1,7 +1,10 @@
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt /tmp/requirements.txt
-# Ставим зависимости через корпоративный индекс и обновляем pip, как в вашем втором Dockerfile
-RUN pip install --no-cache-dir --upgrade pip -Ur /tmp/requirements.txt --index-url https://artifactory.tcsbank.ru/artifactory/api/pypi/python-all/simple/
-COPY . .
-CMD ["python", "tax_consumer.py"]
+curl -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":1,"amount":100}'
+
+docker-compose up --build tax-service
+
+docker exec -it payments-qa-project-kafka-1 bash
+kafka-topics --bootstrap-server kafka:9092 --list
+
+docker exec -it payments-qa-project-db-1 psql -U postgres -d payments
+# SELECT * FROM payments;
+# SELECT * FROM taxes;
