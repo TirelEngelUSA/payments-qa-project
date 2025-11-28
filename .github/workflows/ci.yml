@@ -1,0 +1,43 @@
+name: CI
+on: [push]
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_DB: payments
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 5
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.0.1
+        ports: ['2181:2181']
+      kafka:
+        image: confluentinc/cp-kafka:7.0.1
+        ports: ['9092:9092']
+        options: >-
+          --link zookeeper
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.11
+      - name: Install deps
+        run: |
+          pip install flask psycopg2-binary kafka-python python-json-logger requests pytest
+      - name: Init DB
+        run: |
+          sleep 10
+          psql postgresql://postgres:postgres@localhost:5432/payments -f sql/init.sql
+      - name: Run app and tax-service
+        run: |
+          python app/app.py &
+          python tax_service/tax_consumer.py &
+          sleep 5
+      - name: Run tests
+        run: pytest -q

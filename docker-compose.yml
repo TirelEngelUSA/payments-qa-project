@@ -1,0 +1,62 @@
+version: '3.8'
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.0.1
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - '2181:2181'
+
+  kafka:
+    image: confluentinc/cp-kafka:7.0.1
+    depends_on:
+      - zookeeper
+    ports:
+      - '9092:9092'
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+  db:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: payments
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - ./sql:/docker-entrypoint-initdb.d
+
+  app:
+    build: ./app
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/payments
+      KAFKA_BOOTSTRAP: kafka:29092
+      FLASK_ENV: development
+    ports:
+      - '8000:8000'
+    depends_on:
+      - db
+      - kafka
+
+  tax-service:
+    build: ./tax_service
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/payments
+      KAFKA_BOOTSTRAP: kafka:29092
+    depends_on:
+      - db
+      - kafka
+
+  # Optional: kafkacat container for manual testing
+  kafkacat:
+    image: edenhill/kafkacat:1.6.0
+    depends_on:
+      - kafka
+    entrypoint: ["/bin/sh", "-c", "sleep infinity"]
