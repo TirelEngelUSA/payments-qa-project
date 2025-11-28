@@ -1,3 +1,7 @@
-RUN /usr/share/python3/app/bin/pip install --no-cache-dir \
-    --upgrade pip -Ur /tmp/requirements.txt  --index-url \
-    https://artifactory.tcsbank.ru/artifactory/api/pypi/python-all/simple/
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt /tmp/requirements.txt
+# Ставим зависимости через корпоративный индекс и обновляем pip, как в вашем втором Dockerfile
+RUN pip install --no-cache-dir --upgrade pip -Ur /tmp/requirements.txt --index-url https://artifactory.tcsbank.ru/artifactory/api/pypi/python-all/simple/
+COPY . .
+CMD ["python", "tax_consumer.py"]
