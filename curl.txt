@@ -1,0 +1,155 @@
+Общие замечания
+
+Базовый рабочий curl: curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":1,"amount":1000}'
+Чтобы автоматически получить payment_id из ответа (требует jq): PAYMENT_ID=$(curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":1,"amount":1000}' | jq -r .payment_id)
+Проверка статуса по id: curl -s "http://localhost:8000/status?id=${PAYMENT_ID}"
+Smoke / Sanity (быстрый положительный тест)
+
+Цель: убедиться, что эндпоинт работает и создаёт запись.
+bash
+curl -i -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":1,"amount":500}'
+# посмотреть ответ и payment_id
+
+Пограничные случаи для вашей формулы (edge/boundary tests)
+Проверяем поведение на границах формулы: <1000, =999, =1000, 1001, 1099, 1100, =10000, =10001
+a) income = 999 (меньше 1000 -> min_tax = 150)
+bash
+curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":10,"amount":999}'
+
+b) income = 1000 (первый сотенный шаг)
+
+bash
+curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":11,"amount":1000}'
+c) income = 1001 (проверка округления сотен)
+
+bash
+curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":12,"amount":1001}'
+d) income = 1099 (должно считаться как 1 сотня после 999 -> +10)
+
+bash
+curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":13,"amount":1099}'
+e) income = 1100 (2 сотни)
+
+bash
+curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":14,"amount":1100}'
+f) income = 10000 (верхняя граница второй ветки)
+
+bash
+curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":15,"amount":10000}'
+g) income = 10001 (переход на процентную часть: round(10001 * 0.05))
+
+bash
+curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":16,"amount":10001}'
+Негативные и валидационные тесты (input validation)
+Цель: проверить обработку некорректных данных и ошибок.
+a) Пустой body / отсутствует JSON
+
+bash
+curl -i -X POST http://localhost:8000/create -H "Content-Type: application/json" -d ''
+b) Отсутствует amount
+
+bash
+curl -i -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":2}'
+c) Отсутствует user_id
+
+bash
+curl -i -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"amount":1000}'
+d) Некорректный тип amount (строка)
+
+bash
+curl -i -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":3,"amount":"one hundred"}'
+e) Отрицательное значение amount
+
+bash
+curl -i -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":4,"amount":-500}'
+f) Нулевой amount (если важно проверить)
+
+bash
+curl -i -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":5,"amount":0}'
+g) Некорректный JSON (синтаксическая ошибка)
+
+bash
+curl -i -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":6,"amount":100'
+Тесты на idempotency / дублирование (повторный запрос)
+Цель: проверить поведение при повторной отправке одинаковых данных. (В текущей реализации /create создаёт новую запись в БД при каждом вызове.)
+bash
+# отправляем 2 раза подряд
+curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":20,"amount":1500}'
+curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":20,"amount":1500}'
+# затем можно проверить таблицу payments/taxes, ожидая 2 записанные строки (если нет идемпотентности)
+Конкурентные / нагрузочные простые тесты (concurrency / throughput)
+Цель: посмотреть, как сервис и downstream (DB, Kafka) ведут себя при множественных параллельных запросах.
+a) 50 синхронных запросов (loop)
+
+bash
+for i in $(seq 1 50); do
+  curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d "{\"user_id\":300,\"amount\":$((1000 + i))}" >/dev/null &
+done
+wait
+echo "done"
+b) Параллельно (xargs) 100 запросов:
+
+bash
+seq 1 100 | awk '{printf "{\"user_id\":400,\"amount\":%d}\n", 1000+$1}' \
+  | while IFS= read -r payload; do
+      # запускаем в фоне
+      curl -sS -X POST http://localhost:8000/create \
+        -H "Content-Type: application/json" \
+        -d "$payload" >/dev/null &
+    done
+wait
+echo "done"
+
+Большие значения / границы типов (big numbers)
+Цель: проверить арифметику для больших income (процентная ветка), округления.
+bash
+curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":50,"amount":2000000}'
+
+Интеграционная проверка — получить payment_id и проверить статус (end-to-end)
+Создать платёж, получить payment_id и через /status проверить, что запись есть (и что status = PROCESSING).
+
+bash
+# create and capture id
+PAY_ID=$(curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":77,"amount":2500}'  -r .payment_id)
+echo "created id: $PAY_ID"
+# check status
+curl -s "http://localhost:8000/status?id=${PAY_ID}"
+
+Сценарий проверки фактического вычисленного tax (require manual DB/Kafka check)
+После отправки платежа выполните SELECT в БД (psql) или прочитайте топик payments и дождитесь работы tax_service, затем проверьте таблицу taxes для payment_id.
+Пример отправки и ручной проверки:
+
+bash
+# отправляем
+PAY_ID=$(curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":88,"amount":2500}'  -r .payment_id)
+# подождать небольшую паузу (consumer должен обработать)
+sleep 1
+# проверить через psql в контейнере (пример, если контейнер postgres называется payments-qa-project-db-1)
+docker exec -it payments-qa-project-db-1 psql -U postgres -d payments -c "SELECT * FROM taxes WHERE payment_id=${PAY_ID};"
+# либо читать Kafka (если нужно)
+docker exec -it payments-qa-project-kafka-1 kafka-console-consumer --bootstrap-server localhost:9092 --topic payments --partition 0 --offset 170 --max-messages 10
+
+Полезные вспомогательные команды (не curl, но полезны для QA)
+Просмотреть список топиков Kafka:
+bash
+docker exec -it payments-qa-project-kafka-1 kafka-topics --bootstrap-server localhost:9092 --list
+Посмотреть логи tax_service:
+bash
+docker logs -f <tax_service_container_name>
+Примеры тест-кейсов, которые можно автоматизировать (идеи)
+TC1 (Smoke): POST /create с amount=500 → статус 200, payment_id в ответе.
+TC2 (Boundary low): amount=999 → после обработки в taxes tax_amount == 150.
+TC3 (Boundary step): amount=1000 → tax_amount == 160.
+TC4 (Boundary high): amount=10000 → verify formula branch2.
+TC5 (Percent branch): amount=10001 → tax_amount == 150 + round(10001*0.05).
+TC6 (Invalid JSON): POST invalid JSON → 400.
+TC7 (Concurrency): 100 parallel requests → no crashes, DB contains 100 new payments, tax entries created accordingly.
+TC8 (Idempotency): two identical POSTs → expected behavior depends on spec (check duplicates).
+Если у вас нет jq
+
+Вместо jq можно просто посмотреть raw ответ:
+bash
+curl -s -X POST http://localhost:8000/create -H "Content-Type: application/json" -d '{"user_id":1,"amount":1000}'
+Или извлечь id простым grep/sed (хрупко):
+bash
+curl -s ... | grep -o '"payment_id":[0-9]*' | grep -o '[0-9]*'
