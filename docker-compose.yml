@@ -5,8 +5,7 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
-    ports:
-      - '2181:2181'
+
 
   kafka:
     image: confluentinc/cp-kafka:7.0.1
@@ -50,6 +49,8 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/payments
       KAFKA_BOOTSTRAP: kafka:29092
+    ports:
+      - '5001:5001'
     depends_on:
       - db
       - kafka
